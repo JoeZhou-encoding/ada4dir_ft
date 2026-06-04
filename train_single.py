@@ -165,6 +165,10 @@ def parse_args():
     p.add_argument('--model_config', default='model_d_finetune', type=str, help='configs/<exp>/<model_config>.json')
     p.add_argument('--num_workers', default=8, type=int)
     p.add_argument('--use_mp', action='store_true', default=False, help='mixed precision')
+    p.add_argument('--wandb', action='store_true', default=False, help='enable Weights & Biases logging')
+    p.add_argument('--wandb_project', default=None, type=str, help='override; else uses $WANDB_PROJECT')
+    p.add_argument('--wandb_entity', default=None, type=str, help='override; else uses $WANDB_ENTITY')
+    p.add_argument('--wandb_run', default=None, type=str, help='run name; default = <model>_<degra>')
     return p.parse_args()
 
 
@@ -179,6 +183,25 @@ def main():
 
     degra = args.degra
     degraded_type = DEGRA2TYPE[degra]
+
+    use_wandb = args.wandb
+    if use_wandb:
+        try:
+            import wandb
+        except ImportError:
+            print('==> WARN: wandb not installed (pip install wandb); continuing with tensorboard only')
+            use_wandb = False
+    if use_wandb:
+        run_name = args.wandb_run or ('%s_%s' % (args.model, degra))
+        init_kwargs = dict(name=run_name,
+                           config={**b_setup, **m_setup, 'degra': degra, 'degraded_type': degraded_type,
+                                   'model': args.model, 'finetune_from': args.finetune_from})
+        # project/entity fall back to $WANDB_PROJECT / $WANDB_ENTITY when not given
+        if args.wandb_project:
+            init_kwargs['project'] = args.wandb_project
+        if args.wandb_entity:
+            init_kwargs['entity'] = args.wandb_entity
+        wandb.init(**init_kwargs)
 
     network = eval(args.model)()
     network.cuda()
@@ -238,6 +261,8 @@ def main():
                                degraded_type, use_mp=args.use_mp)
         lr_scheduler.step(epoch + 1)
         writer.add_scalar('train_loss', loss, epoch)
+        if use_wandb:
+            wandb.log({'train_loss': loss, 'lr': optimizer.param_groups[0]['lr']}, step=epoch)
 
         if epoch % b_setup['eval_freq'] == 0:
             f_ssim, f_psnr = valid_single(val_loader, network, force_type=degraded_type)  # forced
@@ -248,6 +273,10 @@ def main():
             writer.add_scalar(degra + '_blind_SSIM', b_ssim, epoch)
             print('[ep %d] loss %.4f | forced PSNR %.4f SSIM %.4f | blind PSNR %.4f SSIM %.4f'
                   % (epoch, loss, f_psnr, f_ssim, b_psnr, b_ssim))
+            if use_wandb:
+                wandb.log({degra + '_forced_PSNR': f_psnr, degra + '_forced_SSIM': f_ssim,
+                           degra + '_blind_PSNR': b_psnr, degra + '_blind_SSIM': b_ssim,
+                           'best_forced_PSNR': max(best_psnr, f_psnr)}, step=epoch)
             if f_psnr > best_psnr:
                 best_psnr = f_psnr
                 save_ckpt(resume_path, epoch, best_psnr, network, optimizer, lr_scheduler, scaler)
@@ -259,6 +288,8 @@ def main():
             print('==> periodic snapshot -> %s' % snap)
 
     writer.close()
+    if use_wandb:
+        wandb.finish()
     print('==> Done. best forced PSNR = %.4f | best ckpt = %s' % (best_psnr, resume_path))
 
 

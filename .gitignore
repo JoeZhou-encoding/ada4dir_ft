@@ -12,6 +12,11 @@ results/
 train_results/
 test_results/
 
+# secrets — never commit (repo is public)
+.env
+*.env
+.env.*
+
 # python
 __pycache__/
 *.pyc
