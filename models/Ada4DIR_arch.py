@@ -602,7 +602,7 @@ class Ada4DIR(nn.Module):
         x = F.pad(x, (0, mod_pad_w, 0, mod_pad_h), 'reflect')
         return x
 
-    def forward(self, inp_img, degra_type=None, gt=None, epoch=None):
+    def forward(self, inp_img, degra_type=None, gt=None, epoch=None, force_type=None):
         x = inp_img
         H, W = x.shape[2:]
         x = self.check_image_size(x)
@@ -618,9 +618,15 @@ class Ada4DIR(nn.Module):
         flag = 0
         batch_size, c, h, w = inp_img.shape
         if epoch == None:
-            degra_key = self.degra_key.detach()
-            degra_key = self.key_mlp(degra_key)
-            de_type = None
+            if force_type is not None:
+                # forced single-degradation inference: route through one MPB branch only
+                de_type = force_type
+                degra_id = self.de_dict[de_type]
+                degra_key = self.degra_key[degra_id, :, :].unsqueeze(0).expand(batch_size, -1, -1)
+            else:
+                degra_key = self.degra_key.detach()
+                degra_key = self.key_mlp(degra_key)
+                de_type = None
         else:
             if epoch <= 350:
                 de_type = degra_type  # [0]
