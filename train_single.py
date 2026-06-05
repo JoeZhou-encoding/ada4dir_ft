@@ -27,8 +27,10 @@ from torch.utils.data import DataLoader, RandomSampler
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
+import math
+
 from dataset import PairLoader
-from utils_basic import AverageMeter, CosineScheduler, pad_img
+from utils_basic import AverageMeter, pad_img
 from SSIM_method import SSIM
 from models.Ada4DIR_arch import *  # noqa: F401,F403  (provides Ada4DIR_t/s/b/d)
 
@@ -80,13 +82,27 @@ def match_prefix(model, sd):
     return sd
 
 
-def save_ckpt(path, epoch, best_psnr, network, optimizer, lr_scheduler, scaler):
+def cosine_lr(epoch, base_lr, value_min, t_max, warmup_t=0, const_t=0):
+    """Per-epoch LR, matching utils_basic.CosineScheduler._get_value but timm-free.
+
+    timm 1.0.x made the Scheduler base class abstract (requires _get_lr), which the
+    repo's CosineScheduler does not implement, so we replicate the schedule here.
+    """
+    if epoch < warmup_t:
+        return value_min + (base_lr - value_min) * epoch / max(1, warmup_t)
+    if epoch < warmup_t + const_t:
+        return base_lr
+    cosine_t = max(1, t_max - warmup_t - const_t)
+    t = min(epoch - warmup_t - const_t, cosine_t)
+    return value_min + 0.5 * (base_lr - value_min) * (1 + math.cos(math.pi * t / cosine_t))
+
+
+def save_ckpt(path, epoch, best_psnr, network, optimizer, scaler):
     torch.save({
         'cur_epoch': epoch + 1,
         'best_psnr': best_psnr,
         'state_dict': network.state_dict(),
         'optimizer': optimizer.state_dict(),
-        'lr_scheduler': lr_scheduler.state_dict(),
         'scaler': scaler.state_dict(),
     }, path)
 
@@ -209,9 +225,8 @@ def main():
 
     criterion = nn.L1Loss()
     optimizer = torch.optim.AdamW(network.parameters(), lr=m_setup['lr'], weight_decay=b_setup['weight_decay'])
-    lr_scheduler = CosineScheduler(optimizer, param_name='lr', t_max=b_setup['epochs'],
-                                   value_min=m_setup['lr'] * 1e-2,
-                                   warmup_t=b_setup['warmup_epochs'], const_t=b_setup['const_epochs'])
+    base_lr = m_setup['lr']
+    lr_min = base_lr * 1e-2
     scaler = GradScaler()
 
     save_dir = os.path.join(args.save_dir, args.exp)
@@ -224,7 +239,6 @@ def main():
         info = torch.load(resume_path, map_location='cpu')
         network.load_state_dict(info['state_dict'])
         optimizer.load_state_dict(info['optimizer'])
-        lr_scheduler.load_state_dict(info['lr_scheduler'])
         scaler.load_state_dict(info['scaler'])
         cur_epoch = info['cur_epoch']
         best_psnr = info['best_psnr']
@@ -257,10 +271,14 @@ def main():
           % (degra, degraded_type, b_setup['epochs'], m_setup['lr'], m_setup['batch_size']))
 
     for epoch in tqdm(range(cur_epoch, b_setup['epochs'] + 1)):
+        cur_lr = cosine_lr(epoch, base_lr, lr_min, b_setup['epochs'],
+                           b_setup['warmup_epochs'], b_setup['const_epochs'])
+        for pg in optimizer.param_groups:
+            pg['lr'] = cur_lr
         loss = train_one_epoch(train_loader, network, criterion, optimizer, scaler, epoch,
                                degraded_type, use_mp=args.use_mp)
-        lr_scheduler.step(epoch + 1)
         writer.add_scalar('train_loss', loss, epoch)
+        writer.add_scalar('lr', cur_lr, epoch)
         if use_wandb:
             wandb.log({'train_loss': loss, 'lr': optimizer.param_groups[0]['lr']}, step=epoch)
 
@@ -279,12 +297,12 @@ def main():
                            'best_forced_PSNR': max(best_psnr, f_psnr)}, step=epoch)
             if f_psnr > best_psnr:
                 best_psnr = f_psnr
-                save_ckpt(resume_path, epoch, best_psnr, network, optimizer, lr_scheduler, scaler)
+                save_ckpt(resume_path, epoch, best_psnr, network, optimizer, scaler)
                 print('==> best updated (forced PSNR %.4f) -> %s' % (best_psnr, resume_path))
 
         if epoch % save_freq == 0:
             snap = os.path.join(save_dir, '%s_%s_ep%d.pth' % (args.model, degra, epoch))
-            save_ckpt(snap, epoch, best_psnr, network, optimizer, lr_scheduler, scaler)
+            save_ckpt(snap, epoch, best_psnr, network, optimizer, scaler)
             print('==> periodic snapshot -> %s' % snap)
 
     writer.close()

@@ -348,6 +348,8 @@ python sanity_check.py --model Ada4DIR_t # 更快
 - **IDE auto-import 污染**：用 VSCode 打开本 repo 后，Python 扩展的 auto-import 擅自把 9 个文件的导入从 cwd 相对（`from models...`、`from dataset`）改成了 `from ada4dir.X` 绝对包导入，其中 `dcn_util.py` 那条还指向了已删除的临时路径 `_upstream_colacomo`。这会导致 `python train.py` 直接 `import ada4dir` 失败。已用 `git restore` 全部还原。**预防**：本 repo 用 cwd 相对导入，`cd ada4dir_ft && python xxx.py` 直接跑，无需把文件夹改名为 `ada4dir`；建议关掉该 repo 的 auto-import / organize-imports on save，或编辑后 `git diff` 复查导入行。
 - **dcn 是死代码**：`models/utils/dcn_util.py`（deform conv）没有被 arch 引用，无需编译 CUDA 扩展。
 - **arch 硬编码 `.cuda()`**：`Ada4DIR_arch.py:595` 的 `self.cri_pix = nn.L1Loss().cuda()` 在建模时即调 `.cuda()`，CPU-only 环境会崩。
+- **timm 1.0.x 让 `CosineScheduler` 报抽象类错误**：`ada4dir_gpu` 装的是 timm 1.0.15，其 `Scheduler` 基类新增了抽象方法 `_get_lr`，而 repo 的 `utils_basic.CosineScheduler`（2023 老代码）没实现 → 实例化报 `TypeError: Can't instantiate abstract class CosineScheduler with abstract method _get_lr`。**修复**：`train_single.py` 不再用 repo 的调度器，改用自带的 `cosine_lr()` 手写 cosine（lr 数学与原 `_get_value` 一致），不碰 utils_basic、不动环境 timm。
+- **wandb project 来自 `.env`**：run 进了哪个 project 由 `${REPO}/.env` 的 `WANDB_PROJECT` 决定。若发现进错项目（如 `gemmaloss2`），是 `.env` 里的值不对，改 `.env` 即可，与代码无关。
 
 ## 14. 实现状态（2026-06-03）
 
