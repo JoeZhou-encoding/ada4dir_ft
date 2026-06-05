@@ -44,6 +44,18 @@ else
     echo "[run] wandb disabled (no WANDB_API_KEY in ${REPO}/.env); tensorboard only"
 fi
 
+# MIG (Multi-Instance GPU) workarounds.
+# On MIG slices PyTorch's caching allocator queries NVML and hits an INTERNAL ASSERT
+# (NVML_SUCCESS == r in CUDACachingAllocator). Disabling the caching allocator avoids
+# that NVML code path. MIG slices also get few CPU cores, so use fewer dataloader
+# workers. Applied only on mig tags; full GPUs (b-batch / c-batch) are unaffected.
+NWORKERS=8
+if [[ "${TAG}" == *mig* ]]; then
+    export PYTORCH_NO_CUDA_MEMORY_CACHING=1
+    NWORKERS=4
+    echo "[run] MIG tag=${TAG}: PYTORCH_NO_CUDA_MEMORY_CACHING=1, num_workers=${NWORKERS}"
+fi
+
 echo "[run] host=$(hostname) jobid=${PJM_JOBID:-NA} degra=${DEGRA} tag=${TAG} mcfg=${MCFG} start=$(date)"
 python -c "import torch; print('torch', torch.__version__, 'cuda', torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'no-gpu')"
 
@@ -55,7 +67,7 @@ python train_single.py \
     --save_dir "${OUT}" --log_dir "${OUT}" \
     --exp Landsat \
     --base_config base_finetune --model_config "${MCFG}" \
-    --num_workers 8 \
+    --num_workers "${NWORKERS}" \
     ${WANDB_FLAGS} \
     2>&1 | tee "logs/train_${TAG}_${DEGRA}.log"
 
