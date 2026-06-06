@@ -10,4 +10,4 @@
 
 set -euo pipefail
 export REPO=/home/pj24003162/ku40003404/weihao/05/Ada4DIR
-bash "${REPO}/scripts/_train_ada_ft_one.sh" blur bbatch model_d_finetune
+bash "${REPO}/scripts/_train_ada_ft_one.sh" blur bbatch model_d_finetune_blur

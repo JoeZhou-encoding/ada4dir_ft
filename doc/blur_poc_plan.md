@@ -350,6 +350,8 @@ python sanity_check.py --model Ada4DIR_t # 更快
 - **arch 硬编码 `.cuda()`**：`Ada4DIR_arch.py:595` 的 `self.cri_pix = nn.L1Loss().cuda()` 在建模时即调 `.cuda()`，CPU-only 环境会崩。
 - **timm 1.0.x 让 `CosineScheduler` 报抽象类错误**：`ada4dir_gpu` 装的是 timm 1.0.15，其 `Scheduler` 基类新增了抽象方法 `_get_lr`，而 repo 的 `utils_basic.CosineScheduler`（2023 老代码）没实现 → 实例化报 `TypeError: Can't instantiate abstract class CosineScheduler with abstract method _get_lr`。**修复**：`train_single.py` 不再用 repo 的调度器，改用自带的 `cosine_lr()` 手写 cosine（lr 数学与原 `_get_value` 一致），不碰 utils_basic、不动环境 timm。
 - **wandb project 来自 `.env`**：run 进了哪个 project 由 `${REPO}/.env` 的 `WANDB_PROJECT` 决定。若发现进错项目（如 `gemmaloss2`），是 `.env` 里的值不对，改 `.env` 即可，与代码无关。
+- **blur 在整卡 batch 32 OOM（其它退化不会）**：blur 走的 `Deblur_route` 是 KPN（预测每像素 5x5 卷积核 + `kernel2d_conv` 的 im2col 展开），显存开销远大于 noise/dark/haze 的简单卷积 route。所以同 batch 32 下只有 blur 在 80GB H100 上 OOM（用满 79GB，只差 96MB）。**修复**：blur 专用 config `configs/Landsat/model_d_finetune_blur.json`（batch 16），只有 blur 的 full-GPU 变体（bbatch / cbatch）用它；noise/dark/haze 仍 batch 32，blur 的 MIG 变体仍 batch 2。
+- **MIG 切片的两个坑**：(1) PyTorch caching allocator 在 MIG 上触发 `NVML_SUCCESS == r INTERNAL ASSERT`（CUDACachingAllocator），需设 `PYTORCH_NO_CUDA_MEMORY_CACHING=1`，已在 `_train_ada_ft_one.sh` 对 mig tag 自动设；(2) 关 caching 后显存更紧 + 12GB 切片小，mig batch 降到 2（`model_d_finetune_mig.json`），num_workers 降到 4。
 
 ## 14. 实现状态（2026-06-03）
 
